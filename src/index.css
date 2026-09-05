@@ -1,0 +1,76 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-page: #F5F8FC;
+    --bg-surface: #FFFFFF;
+    --text-main: #12243A;
+    --text-secondary: #52657A;
+    --primary: #2457D6;
+    --primary-hover: #1D46AF;
+    --subtle-blue: #EAF1FF;
+    --border-subtle: #DCE5F0;
+  }
+
+  body {
+    background-color: var(--bg-page);
+    color: var(--text-main);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+  }
+}
+
+/* Custom scrollbar for comfortable reading */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #DCE5F0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #BCCFDF;
+}
+
+/* Markdown prose styling */
+.markdown-body {
+  color: #12243A;
+  line-height: 1.65;
+  font-size: 0.96rem;
+}
+.markdown-body p {
+  margin-bottom: 0.75rem;
+}
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.markdown-body ul, .markdown-body ol {
+  margin-left: 1.25rem;
+  margin-bottom: 0.75rem;
+  list-style-type: disc;
+}
+.markdown-body ol {
+  list-style-type: decimal;
+}
+.markdown-body li {
+  margin-bottom: 0.25rem;
+}
+.markdown-body strong {
+  font-weight: 600;
+  color: #12243A;
+}
+.markdown-body blockquote {
+  border-left: 3px solid #2457D6;
+  padding-left: 0.75rem;
+  color: #52657A;
+  font-style: italic;
+  margin: 0.5rem 0;
+}

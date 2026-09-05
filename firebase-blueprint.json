@@ -1,0 +1,137 @@
+{
+  "entities": {
+    "Conversation": {
+      "title": "Conversation",
+      "description": "User journal conversation metadata",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "lastMessageSnippet": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "revision": {
+          "type": "number"
+        }
+      },
+      "required": ["id", "title", "createdAt", "updatedAt"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Message in a journal conversation",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "assistant"]
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "conversationId", "role", "content", "createdAt"]
+    },
+    "Summary": {
+      "title": "Summary",
+      "description": "AI conversation summary",
+      "type": "object",
+      "properties": {
+        "conversationId": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 5000
+        },
+        "themes": {
+          "type": "array"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "number"
+        }
+      },
+      "required": ["conversationId", "content", "updatedAt"]
+    },
+    "ActionStep": {
+      "title": "ActionStep",
+      "description": "User-committed action item derived from reflection",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "completed", "dismissed"]
+        },
+        "targetDate": {
+          "type": "string"
+        },
+        "sourceConversationId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        }
+      },
+      "required": ["id", "title", "status", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}/conversations/{conversationId}": {
+      "schema": "Conversation",
+      "description": "User journal conversations"
+    },
+    "/users/{uid}/conversations/{conversationId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Messages belonging to a journal conversation"
+    },
+    "/users/{uid}/conversations/{conversationId}/summaries/{summaryId}": {
+      "schema": "Summary",
+      "description": "Summaries of journal conversations"
+    },
+    "/users/{uid}/actions/{actionId}": {
+      "schema": "ActionStep",
+      "description": "Action steps committed by the user"
+    }
+  }
+}
