@@ -6,3 +6,15 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Private credentials: Firebase browser configuration is intentionally public.
+*.pem
+*.key
+*.p12
+*.pfx
+service-account*.json
+service_account*.json
+**/*firebase-adminsdk*.json
+application_default_credentials.json
+.secrets/
+secrets/
