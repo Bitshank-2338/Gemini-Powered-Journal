@@ -728,3 +728,20 @@ test("daily AI quota tracking, user isolation, and rate-limit error contract", a
   assert.equal(bobUsage.body.used, 0);
   assert.equal(bobUsage.body.remaining, 20);
 });
+
+
+test("live voice requires auth and consent, validates settings and caps each user's sessions", async () => {
+  let issued = 0;
+  dependencies.ai.liveToken = async (voice, accent) => { issued++; return {token: "test-short-lived-token", model: "test-live-model", expiresAt: "2026-09-06T00:33:00Z"}; };
+  const input = {consent: true, voice: "Aoede", accent: "neutral"};
+  assert.equal((await request("/voice/session", "POST", input, "")).status, 401);
+  assert.equal((await request("/voice/session", "POST", {...input, consent: false}, "quota-voice")).status, 400);
+  assert.equal((await request("/voice/session", "POST", {...input, voice: "arbitrary"}, "quota-voice")).status, 400);
+  assert.equal((await request("/voice/session", "POST", {...input, uid: "bob"}, "quota-voice")).status, 400);
+  assert.equal(issued, 0);
+  for (let i = 0; i < 3; i++) assert.equal((await request("/voice/session", "POST", input, "quota-voice")).status, 200);
+  assert.equal((await request("/voice/session", "POST", input, "quota-voice")).status, 429);
+  assert.equal((await request("/voice/session", "POST", input, "quota-voice-other")).status, 200);
+  assert.equal(issued, 4);
+  delete dependencies.ai.liveToken;
+});

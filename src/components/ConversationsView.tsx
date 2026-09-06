@@ -1,3 +1,5 @@
+import { ReadAloud } from "./ReadAloud";
+import { VoiceRoom } from "./VoiceRoom";
 import {
   Plus,
   MessagesSquare,
@@ -74,6 +76,7 @@ export function ConversationsView({
         title="A little perspective."
         subtitle="Reflect with Gemini. Your conversation is summarized and saved after each reply."
       />
+      <VoiceRoom key={chatId} readText={conversation?.messages.filter(m => m.role === "assistant").at(-1)?.content} />
       <div className="conversation-layout">
         <aside className="conversation-list">
           <button
@@ -104,20 +107,7 @@ export function ConversationsView({
                 <div key={m.id} className={"chat-message " + m.role}>
                   <span>{m.role === "user" ? "YOU" : "GEMINI"}</span>
                   <p>{m.content}</p>
-                  {m.role === "assistant" && "speechSynthesis" in window && (
-                    <button
-                      className="text-button"
-                      onClick={() => {
-                        speechSynthesis.cancel();
-                        speechSynthesis.speak(
-                          new SpeechSynthesisUtterance(m.content),
-                        );
-                      }}
-                    >
-                      <Volume2 size={15} />
-                      Listen
-                    </button>
-                  )}
+                  {m.role === "assistant" && <ReadAloud text={m.content} />}
                 </div>
               ))
             ) : (

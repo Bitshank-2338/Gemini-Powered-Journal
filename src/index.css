@@ -2767,3 +2767,13 @@ a {
     min-height: 38px;
   }
 }
+
+.voice-room { padding: 20px; margin: 0 0 24px; border: 1px solid #34435d; border-radius: 16px; background: #101827; }
+.voice-room summary { cursor: pointer; font-size: 17px; color: #c3d7ff; min-height: 44px; }
+.voice-room p { line-height: 1.6; }
+.voice-controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.voice-controls button, .voice-controls select { min-height: 44px; }
+.voice-controls label { display: flex; flex-direction: column; gap: 8px; }
+.voice-room select { color: #eef4ff; background: #182337; border: 1px solid #526789; border-radius: 8px; padding: 10px; }
+.voice-room textarea { display: block; width: 100%; margin: 12px 0; }
+@media (max-width: 410px) { .voice-controls > * { width: 100%; } }

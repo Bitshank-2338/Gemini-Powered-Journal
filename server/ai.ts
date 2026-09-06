@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { z } from "zod";
 import type { ChatMessage, Memory, Preferences } from "../shared/journal";
@@ -99,6 +99,7 @@ function sources<T extends { sourceIds: string[] }>(
   }));
 }
 export interface JournalAI {
+  liveToken?(voice: string, accent: string): Promise<{token: string; model: string; expiresAt: string}>;
   chat(
     messages: ChatMessage[],
     memories: Memory[],
@@ -115,6 +116,23 @@ export interface JournalAI {
   ): Promise<z.infer<typeof recapSchema>>;
 }
 export const journalAI: JournalAI = {
+  async liveToken(voice, accent) {
+    const ai = await getClient();
+    const model = process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
+    const expiresAt = new Date(Date.now() + 3 * 60_000).toISOString();
+    const token = await ai.authTokens.create({config: {
+      uses: 1, expireTime: expiresAt,
+      newSessionExpireTime: new Date(Date.now() + 60_000).toISOString(),
+      liveConnectConstraints: { model, config: {
+        responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {}, outputAudioTranscription: {},
+        speechConfig: {voiceConfig: {prebuiltVoiceConfig: {voiceName: voice}}},
+        systemInstruction: guidance + " Speak naturally, with a " + accent + " accent when speaking English. Follow the user's language. If asked to read text, read it without adding commentary. You have no access to saved memories in this voice session."
+      }}
+    }});
+    if (!token.name) throw new Error("AI_NOT_CONFIGURED");
+    return {token: token.name, model, expiresAt};
+  },
   async chat(messages, memories) {
     const history = messages.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",

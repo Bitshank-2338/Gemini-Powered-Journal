@@ -31,7 +31,7 @@ async function startServer() {
           "img-src 'self' data: blob:",
           "media-src 'self' blob:",
           "font-src 'self'",
-          "connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://" +
+          "connect-src 'self' wss://generativelanguage.googleapis.com https://generativelanguage.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://www.googleapis.com https://" +
             firebaseConfig.authDomain,
           "frame-src https://apis.google.com https://" +
             firebaseConfig.authDomain,

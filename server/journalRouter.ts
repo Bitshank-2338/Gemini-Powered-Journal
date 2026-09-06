@@ -401,6 +401,25 @@ export function createJournalRouter(d: Dependencies) {
       next();
     })().catch(next);
   });
+  router.post("/voice/session", wrap(async (req, res) => {
+    const input = z.object({
+      consent: z.literal(true),
+      voice: z.enum(["Aoede", "Kore", "Puck", "Charon"]),
+      accent: z.enum(["neutral", "Indian English", "British English", "American English", "Australian English"]),
+    }).strict().parse(req.body);
+    if (!d.ai.liveToken) throw new HttpError(503, "Voice is unavailable right now.");
+    const uid = res.locals.uid;
+    await rate(uid, true);
+    // Separate daily session allowance; token lifetime bounds each connection.
+    await d.store.transact(path(uid, "limits", "voice_daily"), old => {
+      const date = now().toISOString().slice(0, 10);
+      const count = old?.date === date ? old.count : 0;
+      if (count >= 3) throw new HttpError(429, "Your three daily voice sessions are used. Try tomorrow.");
+      return {value: {date, count: count + 1}, result: null};
+    });
+    res.setHeader("Cache-Control", "private, no-store");
+    res.json(await d.ai.liveToken(input.voice, input.accent));
+  }));
   router.get(
     "/journal",
     wrap(async (_req, res) => {
