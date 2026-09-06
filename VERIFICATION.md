@@ -38,3 +38,5 @@ Use two disposable Google accounts and synthetic memories, not real private jour
 | Hackathon provenance  | Screenshot Custom Instructions; preserve an original enhancement implemented in AI Studio using docs/AI-STUDIO-ITERATION.md.                                | Pending                                           |
 
 No production-grade or zero-leakage certification is claimed from passing local tests alone.
+
+- Cloud resource update: private media bucket fifa-502907-daynote-media and empty Secret Manager secret daynote-gemini were created on September 6, 2026. No secret version or payload was accessed; runtime IAM remains pending.
