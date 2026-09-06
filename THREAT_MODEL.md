@@ -1,78 +1,34 @@
-# Threat Model: Daynote (Personal Gemini Journal)
+# Daynote threat model
 
-**Target Application:** Daynote — Personal Gemini Journal  
-**Tagline:** "A private space to think clearly and move forward."  
-**Architecture:** React 19 + TypeScript (Client), Node.js Express (Backend), Firebase Authentication (Google Sign-In), Cloud Firestore (User-isolated database), Google Cloud Secret Manager / Gemini SDK (@google/genai).
+## Assets and boundaries
 
----
+Private journal words, recordings, photos, videos, summaries, interests and recaps; Firebase identity tokens; the Gemini key. Browser → authenticated API → Firestore/Cloud Storage. API → Secret Manager → Gemini. Scheduler → independently verified OIDC endpoint.
 
-## 1. Authentication
-- **Threats:**
-  - Token spoofing, manipulation, or replay attacks.
-  - Using expired or forged identities to invoke backend endpoints.
-  - Stale client session remaining active across different user accounts.
-- **Security Controls & Mitigations:**
-  - Firebase Authentication with Google Sign-In as identity provider.
-  - All protected backend API endpoints (`/api/*`) require a bearer token in the `Authorization: Bearer <ID_TOKEN>` header.
-  - Firebase Admin SDK strictly validates tokens (`auth.verifyIdToken(token, true)`), verifying digital signatures, audience, issuer, expiration, and revocation status.
-  - Frontend clears all in-memory state, active Firestore listeners, and conversational contexts immediately on sign-out or account transition.
+## Controls implemented
 
----
+| Threat | Control |
+|---|---|
+| Browser-supplied user ID / path traversal | UID comes exclusively from Firebase Admin verification; identifiers use a restrictive allowlist; request schemas reject extra fields. |
+| Cross-account reads and AI context leakage | Every path is rooted under the verified UID; selected source memories are individually loaded from that root; tests attack reads, uploads, deletes, exports and AI sources. |
+| Private key exposure | Server accesses an explicit Secret Manager version; no Gemini key in frontend environment, browser requests, logs or committed config. Firebase browser config remains public by design. |
+| Forged development credentials | No NODE_ENV-based token bypass; synthetic identities exist only in the injected test fixture. |
+| Unsafe file uploads | 25 MB parser limit; file-signature detection; restricted media formats; memory-category check; owner-bound object path; no active HTML/SVG uploads. |
+| Public media links | Authenticated server download; private no-store responses; no public Firebase download tokens; private bucket IAM/PAP in deployment plan. |
+| Duplicate/concurrent operations | Per-user transactional lease, deterministic IDs, duplicate message detection, attachment hash verification, atomic conversation+summary document. |
+| AI prompt injection | Memory content treated as untrusted data, no autonomous tools/actions, bounded inputs, schema-parsed JSON, citation IDs filtered to submitted sources. |
+| Unbounded cost and resource use | Shared Firestore rate counters, memory/media/account limits, bounded conversation size, maximum request size, bounded recap sampling and scheduler batches. |
+| XSS / leaking error data | React renders AI/user output as plain text, no raw HTML; restrictive production CSP; generic cloud errors; no personal payload logging. |
+| Account changes and local residue | User-keyed React remount, response identity check, media object-URL revocation, recorder track cleanup; journal content is not persisted in localStorage. |
+| Unexpected AI processing | Voice transcription requires explicit confirmation; personal ideas and automatic recaps require separate opt-ins. |
+| Inaccurate recaps | Counts computed by server; sampled narrative disclosed; source links; only completed calendar periods. |
+| Stale derived content | Semantic edits/deletes clear recaps and recommendations; changing timezone clears recaps. |
 
-## 2. Authorization & Data Isolation
-- **Threats:**
-  - Insecure Direct Object Reference (IDOR): User B modifies or reads User A's conversations, messages, summaries, or actions by manipulating URL/payload IDs.
-  - Backend bypass where client supplies arbitrary `uid` parameters.
-  - Mass assignment or privilege escalation.
-- **Security Controls & Mitigations:**
-  - **Single Source of Truth:** `uid` is exclusively derived from the cryptographically verified Firebase ID token on the server. Request parameters or bodies claiming a `uid` are rejected or ignored.
-  - **Backend Access Control:** Every server-side Firestore query or operation strictly targets `users/${verifiedUid}/...`. The backend queries the specific user collection and verifies document existence and ownership before performing writes, AI completions, summaries, or deletions.
-  - **Defense-in-Depth Firestore Rules:** Client-side Firestore rules enforce `request.auth != null && request.auth.uid == uid` across all subcollections (`conversations`, `messages`, `summaries`, `actions`). Direct access to other user trees is denied at the database rule layer.
+## Remaining release risks
 
----
+Application tests use injected service doubles. They prove routing behavior, not deployed IAM or Firebase rules. Real two-user, media, token-revocation and scheduler tests remain mandatory. No malware-scanning/transcoding pipeline is included; formats are checked but media is still untrusted. This release buffers media up to 25 MB, so deployment concurrency is deliberately bounded. No end-to-end encryption, comprehensive account erasure, queued large-scale recap processing or independent security audit is claimed.
 
-## 3. User Input & Request Integrity
-- **Threats:**
-  - Injection attacks (SQL/NoSQL/Command injection, prompt injection).
-  - Denial of Service (DoS) via oversized payloads or spamming expensive LLM endpoints.
-  - Cross-Site Scripting (XSS) via reflection text.
-- **Security Controls & Mitigations:**
-  - Payload limits: Express limits JSON body sizes (100KB max). Message text is capped (max 10,000 characters) and validated.
-  - Prompt Injection Defense: User input is passed as distinct content parts in Gemini API user turns, separated from system instructions. System instructions explicitly restrict Gemini to reflection, brainstorming, and structuring action proposals, forbidding tool execution or prompt override.
-  - Document IDs are validated against strict alphanumeric/UUID character sets.
+A process crash can leave an operation lease for up to ten minutes. An interrupted upload can leave an orphan object if the process dies between storage and metadata writes; failed writes perform best-effort cleanup, and retries with the same memory ID and content hash can recover uploaded objects. Orphans with no later retry still need reconciliation. Add lifecycle reconciliation before scaling. Deleting original memories does not redact passages already copied into separate conversations; the UI explains that those conversations must be removed separately.
 
----
+## Dependency overrides
 
-## 4. Model Output & AI Integrity
-- **Threats:**
-  - Hallucinated or malicious output containing unescaped HTML/JavaScript executing in the browser.
-  - Model claiming it has taken external real-world actions, sent emails, or contacted emergency/medical services.
-  - Model returning invalid formats for summaries or structured action suggestions.
-- **Security Controls & Mitigations:**
-  - Safe Rendering: React automatically escapes HTML. Model Markdown is parsed safely using `react-markdown` with HTML disabled or sanitized.
-  - System Instructions: Ground Gemini strictly as a private reflection and brainstorming journal. Prohibit diagnostic/therapy claims and claims of external actions.
-  - Schema Validation: For "Turn this into a next step", Gemini output is requested with strict JSON schema structure. Server validates that the proposed actions are non-empty arrays with required `text` fields before responding. Malformed proposals are rejected with an explicit error.
-  - User Confirmation Gate: No suggested action is ever committed to Firestore automatically. The user must review, optionally edit, and explicitly click "Save action".
-
----
-
-## 5. Storage & Persistence Integrity
-- **Threats:**
-  - Incomplete deletions leaving orphaned messages or actions.
-  - Concurrency race conditions (e.g. older asynchronous summary job overwriting newer summary).
-  - False reporting of "Saved" status when persistence failed.
-- **Security Controls & Mitigations:**
-  - Version/Revision tracking: Summaries are linked to the specific conversation revision / timestamp. Asynchronous summary updates check that the summarized revision matches or exceeds the stored revision before writing.
-  - Strict Deletion Lifecycle: Deleting a conversation atomically or sequentially cleans up child messages, summaries, and associated next-step actions tagged with `sourceConversationId`.
-  - Honest UI State: State is marked "Saving..." during transit and transitions to "Saved" only after Firestore confirmation, or "Save failed" with retry if rejected.
-
----
-
-## 6. Secrets & Environment
-- **Threats:**
-  - Leaking `GEMINI_API_KEY` or service account credentials in client JS bundles, network headers, git repositories, or error messages.
-- **Security Controls & Mitigations:**
-  - Client bundle contains only public Firebase Web Config (`apiKey`, `projectId`, `authDomain`).
-  - `GEMINI_API_KEY` is loaded strictly on the Node.js server via environment variables / Google Cloud Secret Manager.
-  - Server errors return sanitized error messages (e.g., "AI service temporarily unavailable") rather than dumping stack traces or credentials.
-  - `.env.example` contains only variable names and dummy placeholders.
+qs is pinned to 6.16.0 and uuid to 11.1.1 through npm overrides to resolve the advisories found in upstream dependency trees. Keep the lockfile and rerun audit, build and tests when upgrading. The uuid patch retains CommonJS support required by upstream Google clients; avoid blindly applying npm audit's suggested Firebase Admin downgrade.

@@ -1,0 +1,15 @@
+.git
+node_modules
+dist
+.env
+.env.*
+!.env.example
+*.log
+*.pem
+*.key
+.secrets
+secrets
+service-account*.json
+service_account*.json
+application_default_credentials.json
+**/*firebase-adminsdk*.json
