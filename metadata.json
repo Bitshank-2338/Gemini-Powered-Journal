@@ -1,6 +1,6 @@
 {
   "name": "Daynote - Personal Gemini Journal",
-  "description": "A private space to think clearly and move forward.",
-  "requestFramePermissions": [],
+  "description": "A private voice-first journal for memories, reflection and personal recaps.",
+  "requestFramePermissions": ["microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
