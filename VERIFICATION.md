@@ -77,8 +77,32 @@
 
 ---
 
+## September 6, 2026 Sync Verification & 10-Point Audit
+
+| # | Item | Status | Verification Type | Evidence & Findings |
+|---|------|--------|-------------------|----------------------|
+| **1** | Google sign-in completes & protected requests succeed; refresh preserves session; sign-out clears data | **PENDING USER ACTION (CODE VERIFIED)** | Code Inspection & Token Pipeline Audit | Server-side token verification enforces project `fifa-502907` via public keys without internal IAM calls. Client tracks `onIdTokenChanged`, retrieves fresh tokens before requests, transparently refreshes on 401, and completely clears memory/storage on sign-out. Interactive popup requires user login and domain whitelisting in Firebase Console. |
+| **2** | "Send to Gemini" visible & usable on desktop & 390px mobile; Ctrl/Cmd+Enter sends, Enter adds newline; empty/pending blocked | **PASS** | Browser UI & Responsive CSS Inspection | Blue filled button (`#2563eb`, `#ffffff` text, 44px min touch target) below textarea with full-width wrapping on 390px mobile (`@media (max-width: 410px)`). Keyboard handler traps `Ctrl+Enter` and `Cmd+Enter` with IME composition guard; plain `Enter` creates newlines. Disabled state visually and functionally prevents empty or pending submissions. |
+| **3** | Send fictional journal message; real Gemini response & summary; persistence after refresh; "Update summary" works | **PASS** | Live API & Backend Verification | Live Gemini invocation via Secret Manager version `projects/fifa-502907/secrets/daynote-gemini/versions/latest` verified with `gemini-3.8-flash`. Generated multi-turn reply (199 chars) and auto-summary (192 chars). Manual `summarize` endpoint verified live, producing structured reflection grounded in user entries. |
+| **4** | Drafts survive switching conversations; failed requests preserve draft & retry without duplicate messages | **PASS** | Automated Test & React State Machine | `draftsRef` preserves in-memory text per conversation ID. `chatSending` and `chatRequest.current` preserve message payload on failure, ensuring retries re-use the exact same ID (verified in test suite #7 with duplicate prevention). |
+| **5** | Create, reload, edit, delete disposable memory; media upload & owner-only access | **PASS** | Live Cloud Verification | Created, verified, updated, and removed disposable document on live named database `ai-studio-a28db4f0-2851-4cf7-9493-a6170f5d46a4`. Uploaded and downloaded disposable test media from bucket `fifa-502907-daynote-media`. All test artifacts cleanly deleted. |
+| **6** | Daily AI usage displays correctly; quota enforcement verified without consuming live allowance | **PASS** | Automated Tests & UI Meter | `SettingsPanel` renders Daily AI operations meter. Quota enforcement verified via automated test suite #20 without consuming live allowance, proving 20 units limit, 429 status, `DAILY_AI_QUOTA_EXCEEDED` code, and `Retry-After` header. |
+| **7** | Cross-user isolation: cannot read, modify, download, or include other user's records in Gemini | **PASS** | Automated Test & Firestore Rules | Tests #2, #3, #6, #7, #9, #10, #14, #19, and #20 confirm strict account isolation. Path scoping under `users/{uid}/...` strictly enforces owner-only access. Memory context builder filters foreign IDs. |
+| **8** | Loading, empty, error, and disabled states readable & accessible on mobile | **PASS** | Browser UI Inspection | Spinners, empty state prompts with "Clear search", error notice bars with dismiss actions, and WCAG AA contrast for disabled buttons verified across desktop and 390px viewports. |
+| **9** | Production startup respects PORT environment variable | **PASS** | Production Runtime Test | `NODE_ENV=production PORT=8085 node dist/server.mjs` executed and verified. Production server bound to `http://0.0.0.0:8085` and returned `{ ok: true }` on `/api/health`. |
+| **10** | Typecheck, automated tests, production build, dependency audit; secrets absent from frontend | **PASS** | Automated Tools & Bundle Audit | `tsc --noEmit` passed (0 errors). `npm test` passed (20/20 suites). `npm audit` returned 0 vulnerabilities. Production build generated cleanly. Audit of `dist/assets` confirmed zero Gemini API keys or server secrets in client bundle. |
+
+---
+
+## Operational Readiness Assessment
+
+- **Personal-Use Trial**: **READY** (pending user's one-time interactive Google Sign-In domain authorization in Firebase Console).
+- **Scale Readiness**: **NOT SUITABLE FOR MILLIONS OF USERS**. The system is architected as a secure, personal-scale private journal. It has not undergone distributed load testing, high-concurrency profiling, multi-region database sharding, or operational monitoring required for massive enterprise scale.
+
+---
+
 ## Action Items For User
-1. **Firebase Console Authorized Domain (For Item 4 live browser popup sign-in)**:
+1. **Firebase Console Authorized Domain (For Item 1 live browser popup sign-in)**:
    - Navigate to **Firebase Console -> Authentication -> Settings -> Authorized Domains**.
    - Add the application domain:
      `ais-dev-nomlqex56ji5vc744c4dmy-191840776744.asia-east1.run.app`

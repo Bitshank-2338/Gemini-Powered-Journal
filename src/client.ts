@@ -188,3 +188,4 @@ export function download(value: Blob | object, filename: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+

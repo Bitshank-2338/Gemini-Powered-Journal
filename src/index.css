@@ -2743,6 +2743,15 @@ a {
   .landing h1 {
     font-size: 61px;
   }
+  .chat-composer-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .chat-send-button {
+    width: 100%;
+    justify-content: center;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
