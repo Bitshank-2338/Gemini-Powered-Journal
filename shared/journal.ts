@@ -1,4 +1,5 @@
 export type MemoryKind = "text" | "audio" | "image" | "video";
+export type Tab = "Today" | "Memories" | "Conversations" | "For you" | "Recaps" | "Settings";
 export interface Memory {
   id: string;
   title: string;
@@ -45,6 +46,13 @@ export interface Recap {
   voiceCount: number;
   createdAt: string;
   sampleSize: number;
+  closingLine?: string;
+}
+export interface AiUsage {
+  dailyLimit: number;
+  used: number;
+  remaining: number;
+  resetsAt: string;
 }
 export const defaultPreferences: Preferences = {
   interests: [],

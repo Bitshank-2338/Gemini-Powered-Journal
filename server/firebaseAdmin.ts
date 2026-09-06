@@ -7,7 +7,7 @@ import config from "../firebase-applet-config.json";
 export const adminApp = getApps().length
   ? getApp()
   : initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID || config.projectId,
+      projectId: process.env.FIREBASE_PROJECT_ID || config.projectId || "fifa-502907",
       storageBucket: process.env.STORAGE_BUCKET || config.storageBucket,
     });
 export const adminAuth = getAuth(adminApp);

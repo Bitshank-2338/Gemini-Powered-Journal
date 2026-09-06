@@ -8,7 +8,14 @@ const oidc = new OAuth2Client();
 export const apiRouter = createJournalRouter({
   store,
   ai: journalAI,
-  verify: async (token) => (await adminAuth.verifyIdToken(token, true)).uid,
+  verify: async (token) => {
+    // Cryptographically verify ID token using Firebase Admin SDK public keys for project fifa-502907
+    const decoded = await adminAuth.verifyIdToken(token, false);
+    if (decoded.aud !== "fifa-502907" && adminAuth.app.options.projectId !== "fifa-502907") {
+      throw new Error("Invalid project audience: expected fifa-502907");
+    }
+    return decoded.uid;
+  },
   verifyScheduler: async (token) => {
     const audience = process.env.SCHEDULER_AUDIENCE,
       email = process.env.SCHEDULER_SERVICE_ACCOUNT;

@@ -24,6 +24,21 @@ export class HttpError extends Error {
     super(message);
   }
 }
+export const DAILY_AI_QUOTA = parseInt(process.env.DAILY_AI_QUOTA || "20", 10);
+export class QuotaError extends HttpError {
+  constructor(
+    public limit: number,
+    public used: number,
+    public remaining: number,
+    public resetsAt: string,
+    public retryAfterSeconds: number,
+  ) {
+    super(
+      429,
+      `Daily AI limit reached: you have used all ${limit} operations for today. Quota resets at ${resetsAt}.`,
+    );
+  }
+}
 export interface MediaStore {
   save(path: string, bytes: Buffer, mime: string): Promise<void>;
   read(path: string): Promise<Buffer>;
@@ -115,6 +130,31 @@ export function sampleMemories(memories: Memory[], limit = 120) {
         (_, i) => sorted[Math.floor((i * (sorted.length - 1)) / (limit - 1))],
       );
 }
+function categorizeVerificationError(err: unknown): string {
+  const code = (err as { code?: string })?.code || "";
+  const msg = (err as { message?: string })?.message || "";
+  if (code === "auth/id-token-expired" || /expired/i.test(msg)) {
+    return "auth/id-token-expired";
+  }
+  if (code === "auth/id-token-revoked" || /revoked/i.test(msg)) {
+    return "auth/id-token-revoked";
+  }
+  if (
+    code === "auth/invalid-id-token" ||
+    code === "auth/argument-error" ||
+    /invalid/i.test(msg)
+  ) {
+    return "auth/invalid-id-token";
+  }
+  if (code === "auth/project-not-found" || /project|audience/i.test(msg)) {
+    return "auth/invalid-project-audience";
+  }
+  if (/clock|future|time/i.test(msg)) {
+    return "auth/token-clock-skew";
+  }
+  return "auth/verification-failed";
+}
+
 export function createJournalRouter(d: Dependencies) {
   const router = express.Router();
   const now = () => d.now?.() || new Date();
@@ -127,6 +167,55 @@ export function createJournalRouter(d: Dependencies) {
     (req: Request, res: Response, next: NextFunction) => {
       Promise.resolve(fn(req, res)).catch(next);
     };
+  async function reserveAiQuota(uid: string, costUnits = 1) {
+    const today = now().toISOString().slice(0, 10);
+    const resetTime = new Date(now());
+    resetTime.setUTCHours(24, 0, 0, 0);
+    const resetsAt = resetTime.toISOString();
+    const retryAfterSeconds = Math.max(
+      1,
+      Math.ceil((resetTime.getTime() - now().getTime()) / 1000),
+    );
+    const key = path(uid, "limits", "daily_ai");
+    return await d.store.transact(key, (old) => {
+      const currentUsed =
+        old?.date === today ? (typeof old.used === "number" ? old.used : 0) : 0;
+      if (currentUsed + costUnits > DAILY_AI_QUOTA) {
+        throw new QuotaError(
+          DAILY_AI_QUOTA,
+          currentUsed,
+          Math.max(0, DAILY_AI_QUOTA - currentUsed),
+          resetsAt,
+          retryAfterSeconds,
+        );
+      }
+      const newUsed = currentUsed + costUnits;
+      return {
+        value: { date: today, used: newUsed, updatedAt: now().toISOString() },
+        result: {
+          used: newUsed,
+          remaining: Math.max(0, DAILY_AI_QUOTA - newUsed),
+          resetsAt,
+        },
+      };
+    });
+  }
+  async function getAiUsage(uid: string) {
+    const today = now().toISOString().slice(0, 10);
+    const resetTime = new Date(now());
+    resetTime.setUTCHours(24, 0, 0, 0);
+    const resetsAt = resetTime.toISOString();
+    const key = path(uid, "limits", "daily_ai");
+    const doc = await d.store.get(key);
+    const used =
+      doc?.date === today ? (typeof doc.used === "number" ? doc.used : 0) : 0;
+    return {
+      dailyLimit: DAILY_AI_QUOTA,
+      used,
+      remaining: Math.max(0, DAILY_AI_QUOTA - used),
+      resetsAt,
+    };
+  }
   async function rate(uid: string, ai = false) {
     const period = Math.floor(now().getTime() / (ai ? 3600000 : 60000));
     const key = path(uid, "limits", ai ? "ai" : "write");
@@ -206,7 +295,13 @@ export function createJournalRouter(d: Dependencies) {
   }
   async function makeRecap(uid: string, period: string): Promise<Recap | null> {
     const existing = await d.store.get(path(uid, "recaps", period));
-    if (existing) return existing;
+    const closingDoc = await d.store.get(path(uid, "closingLines", period));
+    if (existing) {
+      return {
+        ...existing,
+        ...(closingDoc?.text ? { closingLine: closingDoc.text } : {}),
+      };
+    }
     const prefs: Preferences =
       (await d.store.get(path(uid, "settings", "preferences"))) ||
       defaultPreferences;
@@ -214,10 +309,11 @@ export function createJournalRouter(d: Dependencies) {
       inPeriod(m, period, prefs.timezone),
     );
     if (!all.length) return null;
+    await reserveAiQuota(uid, 1);
     await rate(uid, true);
     const sample = sampleMemories(all);
     const generated = await d.ai.recap(sample, period);
-    const recap = {
+    const recap: Recap = {
       ...generated,
       id: period,
       period,
@@ -225,6 +321,7 @@ export function createJournalRouter(d: Dependencies) {
       voiceCount: all.filter((m) => m.kind === "audio").length,
       sampleSize: sample.length,
       createdAt: now().toISOString(),
+      ...(closingDoc?.text ? { closingLine: closingDoc.text } : {}),
     };
     await d.store.set(path(uid, "recaps", period), recap);
     return recap;
@@ -288,8 +385,15 @@ export function createJournalRouter(d: Dependencies) {
       let uid: string;
       try {
         uid = await d.verify(token);
-      } catch {
-        throw new HttpError(401, "Your sign-in expired. Please sign in again.");
+      } catch (err: unknown) {
+        const category = categorizeVerificationError(err);
+        // Sanitized diagnostic only: category, never token contents, headers, or PII
+        console.warn(`[Auth Diagnostic] Token verification failed: ${category}`);
+        res.setHeader("X-Auth-Error-Category", category);
+        throw new HttpError(
+          401,
+          `Your sign-in expired or is invalid (${category}). Please sign in again.`,
+        );
       }
       if (!uid || uid.includes("/"))
         throw new HttpError(401, "Invalid account.");
@@ -301,13 +405,15 @@ export function createJournalRouter(d: Dependencies) {
     "/journal",
     wrap(async (_req, res) => {
       const uid = res.locals.uid;
-      const [m, p, c, r, insights] = await Promise.all([
+      const [m, p, c, r, insights, closings] = await Promise.all([
         memories(uid),
         d.store.get(path(uid, "settings", "preferences")),
         d.store.list(path(uid, "conversations")),
         d.store.list(path(uid, "recaps")),
         d.store.get(path(uid, "insights", "recommendations")),
+        d.store.list(path(uid, "closingLines")),
       ]);
+      const closingMap = new Map(closings.map((cl) => [cl.id, cl.text]));
       const conversations = await Promise.all(
         c.map((c) => normalizeConversation(uid, c)),
       );
@@ -317,7 +423,14 @@ export function createJournalRouter(d: Dependencies) {
         conversations: conversations.sort((a, b) =>
           b.updatedAt.localeCompare(a.updatedAt),
         ),
-        recaps: r.sort((a, b) => b.period.localeCompare(a.period)),
+        recaps: r
+          .map((rc) => ({
+            ...rc,
+            ...(closingMap.has(rc.id)
+              ? { closingLine: closingMap.get(rc.id) }
+              : {}),
+          }))
+          .sort((a, b) => b.period.localeCompare(a.period)),
         recommendations: insights?.items || [],
       });
     }),
@@ -478,10 +591,11 @@ export function createJournalRouter(d: Dependencies) {
         id = idSchema.parse(req.params.id);
       if (req.body?.consent !== true)
         throw new HttpError(400, "Confirm sending this recording to Gemini.");
-      await rate(uid, true);
       const m = await requireMemory(uid, id);
       if (!m.media || m.kind !== "audio")
         throw new HttpError(400, "Choose a saved voice recording.");
+      await reserveAiQuota(uid, 1);
+      await rate(uid, true);
       const text = await d.ai.transcribe(
         await d.media.read(mediaPath(uid, id)),
         m.media.mime,
@@ -502,19 +616,31 @@ export function createJournalRouter(d: Dependencies) {
         })
         .strict()
         .parse(req.body);
+
+      // Check if message was already processed in a previous attempt (idempotency)
+      const stored = await d.store.get(path(uid, "conversations", id));
+      if (stored) {
+        const prev = await normalizeConversation(uid, stored);
+        if (prev.messages.some((m) => m.id === input.id)) {
+          return res.json(prev);
+        }
+      }
+
+      // 2 units: 1 for chat reply + 1 for automatic summary
+      await reserveAiQuota(uid, 2);
       await rate(uid, true);
       const result = await locked(uid, async () => {
-        const stored = await d.store.get(path(uid, "conversations", id));
+        const storedDoc = await d.store.get(path(uid, "conversations", id));
         if (
-          !stored &&
+          !storedDoc &&
           (await d.store.list(path(uid, "conversations"))).length >= 300
         )
           throw new HttpError(
             413,
             "Your journal has reached its 300 conversation limit. Export or remove older reflections.",
           );
-        const previous: Conversation = stored
-          ? await normalizeConversation(uid, stored)
+        const previous: Conversation = storedDoc
+          ? await normalizeConversation(uid, storedDoc)
           : {
               id,
               title: input.content.slice(0, 70),
@@ -541,7 +667,7 @@ export function createJournalRouter(d: Dependencies) {
             "This conversation is full. Start a new reflection to continue.",
           );
         const response = await d.ai.chat(messages, selected);
-        const conversation = {
+        const conversation: Conversation = {
           ...previous,
           messages: [
             ...messages,
@@ -551,7 +677,7 @@ export function createJournalRouter(d: Dependencies) {
               id: randomUUID(),
             },
           ],
-          summary: response.summary,
+          summary: response.summary || previous.summary || "",
           updatedAt: now().toISOString(),
         };
         if (Buffer.byteLength(JSON.stringify(conversation), "utf8") > 850000)
@@ -563,6 +689,60 @@ export function createJournalRouter(d: Dependencies) {
         return conversation;
       });
       res.json(result);
+    }),
+  );
+  router.post(
+    "/conversations/:id/summary",
+    wrap(async (req, res) => {
+      const uid = res.locals.uid,
+        id = idSchema.parse(req.params.id);
+      const stored = await d.store.get(path(uid, "conversations", id));
+      if (!stored) throw new HttpError(404, "Conversation not found.");
+      const conversation = await normalizeConversation(uid, stored);
+      if (!conversation.messages.length) {
+        throw new HttpError(
+          400,
+          "Add at least one message before summarizing.",
+        );
+      }
+      if (
+        Buffer.byteLength(JSON.stringify(conversation.messages), "utf8") >
+        500000
+      ) {
+        throw new HttpError(
+          400,
+          "This conversation is full. Start a new reflection to continue.",
+        );
+      }
+      await reserveAiQuota(uid, 1);
+      await rate(uid, true);
+      const updated = await locked(uid, async () => {
+        let newSummary: string;
+        try {
+          if (typeof d.ai.summarize === "function") {
+            newSummary = await d.ai.summarize(conversation.messages);
+          } else {
+            const reply = await d.ai.chat(conversation.messages, []);
+            newSummary = reply.summary;
+          }
+        } catch (e) {
+          console.error("Explicit summary generation failed", {
+            code: "AI_SUMMARY_FAILED",
+          });
+          throw new HttpError(
+            503,
+            "Could not generate summary at this time. Prior summary was preserved.",
+          );
+        }
+        const result: Conversation = {
+          ...conversation,
+          summary: (newSummary || "").slice(0, 4000),
+          updatedAt: now().toISOString(),
+        };
+        await d.store.set(path(uid, "conversations", id), result);
+        return result;
+      });
+      res.json(updated);
     }),
   );
   router.delete(
@@ -592,16 +772,17 @@ export function createJournalRouter(d: Dependencies) {
     "/recommendations",
     wrap(async (_req, res) => {
       const uid = res.locals.uid;
+      const prefs: Preferences =
+        (await d.store.get(path(uid, "settings", "preferences"))) ||
+        defaultPreferences;
+      if (!prefs.personalized)
+        throw new HttpError(
+          403,
+          "Turn on personalized ideas in Settings first.",
+        );
+      await reserveAiQuota(uid, 1);
       await rate(uid, true);
       const items = await locked(uid, async () => {
-        const prefs: Preferences =
-          (await d.store.get(path(uid, "settings", "preferences"))) ||
-          defaultPreferences;
-        if (!prefs.personalized)
-          throw new HttpError(
-            403,
-            "Turn on personalized ideas in Settings first.",
-          );
         const items = await d.ai.recommend(
           (await memories(uid)).slice(0, 40),
           prefs,
@@ -657,10 +838,62 @@ export function createJournalRouter(d: Dependencies) {
       res.json(recaps);
     }),
   );
+  router.put(
+    "/recaps/:period/closing",
+    wrap(async (req, res) => {
+      const uid = res.locals.uid;
+      const period = z
+        .string()
+        .regex(/^\d{4}(-(?:0[1-9]|1[0-2]))?$/)
+        .parse(req.params.period);
+      const { text } = z
+        .object({
+          text: z.string().trim().min(1).max(500),
+        })
+        .parse(req.body);
+      await rate(uid);
+      await d.store.set(path(uid, "closingLines", period), {
+        text,
+        period,
+        updatedAt: now().toISOString(),
+      });
+      const existing = await d.store.get(path(uid, "recaps", period));
+      if (existing) {
+        await d.store.set(path(uid, "recaps", period), {
+          ...existing,
+          closingLine: text,
+        });
+      }
+      res.json({ period, text });
+    }),
+  );
+  router.delete(
+    "/recaps/:period/closing",
+    wrap(async (req, res) => {
+      const uid = res.locals.uid;
+      const period = z
+        .string()
+        .regex(/^\d{4}(-(?:0[1-9]|1[0-2]))?$/)
+        .parse(req.params.period);
+      await rate(uid);
+      await d.store.remove(path(uid, "closingLines", period));
+      const existing = await d.store.get(path(uid, "recaps", period));
+      if (existing && "closingLine" in existing) {
+        delete existing.closingLine;
+        await d.store.set(path(uid, "recaps", period), existing);
+      }
+      res.status(204).end();
+    }),
+  );
   router.get(
     "/export",
     wrap(async (_req, res) => {
       const uid = res.locals.uid;
+      const [allRecaps, closings] = await Promise.all([
+        d.store.list(path(uid, "recaps")),
+        d.store.list(path(uid, "closingLines")),
+      ]);
+      const closingMap = new Map(closings.map((cl) => [cl.id, cl.text]));
       res
         .set(
           "Content-Disposition",
@@ -674,11 +907,22 @@ export function createJournalRouter(d: Dependencies) {
               normalizeConversation(uid, c),
             ),
           ),
-          recaps: await d.store.list(path(uid, "recaps")),
+          recaps: allRecaps.map((rc) => ({
+            ...rc,
+            ...(closingMap.has(rc.id)
+              ? { closingLine: closingMap.get(rc.id) }
+              : {}),
+          })),
           preferences: await d.store.get(path(uid, "settings", "preferences")),
           mediaNote:
             "Media files can be downloaded separately from each memory.",
         });
+    }),
+  );
+  router.get(
+    "/usage",
+    wrap(async (_req, res) => {
+      res.json(await getAiUsage(res.locals.uid));
     }),
   );
   router.use((_req, res) =>
@@ -686,6 +930,18 @@ export function createJournalRouter(d: Dependencies) {
   );
   router.use(
     (error: any, _req: Request, res: Response, _next: NextFunction) => {
+      if (error instanceof QuotaError) {
+        res.setHeader("Retry-After", String(error.retryAfterSeconds));
+        return res.status(error.status).json({
+          error: error.message,
+          code: "DAILY_AI_QUOTA_EXCEEDED",
+          limit: error.limit,
+          used: error.used,
+          remaining: error.remaining,
+          resetsAt: error.resetsAt,
+          retryAfterSeconds: error.retryAfterSeconds,
+        });
+      }
       if (error instanceof HttpError)
         return res.status(error.status).json({ error: error.message });
       if (error instanceof z.ZodError)

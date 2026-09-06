@@ -8,20 +8,20 @@ dotenv.config();
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  app.disable("x-powered-by");
+  const PORT = process.env.NODE_ENV === "production" ? Number(process.env.PORT || 8080) : 3000;
 
   // Security headers & JSON parser
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
     res.setHeader(
       "Permissions-Policy",
       "camera=(), microphone=(self), geolocation=()",
     );
-    if (process.env.NODE_ENV === "production")
+    if (process.env.NODE_ENV === "production") {
       res.setHeader("Strict-Transport-Security", "max-age=31536000");
-    if (process.env.NODE_ENV === "production")
+      res.setHeader("X-Frame-Options", "DENY");
       res.setHeader(
         "Content-Security-Policy",
         [
@@ -41,6 +41,7 @@ async function startServer() {
           "form-action 'self'",
         ].join("; "),
       );
+    }
     if (_req.path.startsWith("/api/"))
       res.setHeader("Cache-Control", "private, no-store");
     next();

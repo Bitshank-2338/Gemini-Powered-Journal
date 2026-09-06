@@ -52,7 +52,7 @@ const dependencies: Dependencies = {
   store: db,
   now: () => new Date("2026-09-06T00:30:00Z"),
   verify: async (token) => {
-    if (!["alice", "bob"].includes(token)) throw new Error("invalid");
+    if (!["alice", "bob"].includes(token) && !token.startsWith("quota-")) throw new Error("invalid");
     return token;
   },
   verifyScheduler: async (token) => {
@@ -105,6 +105,11 @@ const dependencies: Dependencies = {
         sourceIds: memories.slice(0, 1).map((m) => m.id),
       };
     },
+    async summarize(messages) {
+      aiCalls++;
+      if (failAI) throw new Error("sensitive SDK details must not escape");
+      return "Refreshed summary of " + messages.length + " messages.";
+    },
   },
 };
 let server: Server, base: string;
@@ -143,6 +148,7 @@ async function request(
   const contentType = response.headers.get("content-type") || "";
   return {
     status: response.status,
+    headers: response.headers,
     body: contentType.includes("json")
       ? await response.json()
       : Buffer.from(await response.arrayBuffer()),
@@ -499,4 +505,226 @@ test("rate limits apply across requests using the shared store", async () => {
     ).status,
     429,
   );
+});
+
+test("user closing lines: validation, persistence, isolation, and regeneration survival", async () => {
+  await db.remove("users/bob/limits/write");
+  await db.remove("users/alice/limits/write");
+  // 1. Validation: invalid period format rejected with 400
+  const badPeriod = await request(
+    "/recaps/invalid-period/closing",
+    "PUT",
+    { text: "Take more walks" },
+    "alice",
+  );
+  assert.equal(badPeriod.status, 400);
+
+  // 1b. Validation: empty text or over 500 chars rejected with 400
+  const emptyText = await request(
+    "/recaps/2026-08/closing",
+    "PUT",
+    { text: "" },
+    "alice",
+  );
+  assert.equal(emptyText.status, 400);
+
+  const longText = await request(
+    "/recaps/2026-08/closing",
+    "PUT",
+    { text: "a".repeat(501) },
+    "alice",
+  );
+  assert.equal(longText.status, 400);
+
+  // 2. Persistence: alice saves a closing line
+  const saveRes = await request(
+    "/recaps/2026-08/closing",
+    "PUT",
+    { text: "Carry forward gentle mornings and more outdoor time." },
+    "alice",
+  );
+  assert.equal(saveRes.status, 200);
+  assert.equal(
+    saveRes.body.text,
+    "Carry forward gentle mornings and more outdoor time.",
+  );
+
+  // Stored in Firestore under users/alice/closingLines/2026-08
+  const savedDoc = await db.get("users/alice/closingLines/2026-08");
+  assert.equal(
+    savedDoc.text,
+    "Carry forward gentle mornings and more outdoor time.",
+  );
+
+  // 3. Isolation: bob's /journal and recaps must NOT contain alice's closing line
+  const bobJournal = await request("/journal", "GET", undefined, "bob");
+  const bobRecaps = bobJournal.body.recaps.filter(
+    (r: any) => r.period === "2026-08",
+  );
+  for (const r of bobRecaps) {
+    assert.notEqual(
+      r.closingLine,
+      "Carry forward gentle mornings and more outdoor time.",
+    );
+  }
+
+  // Bob cannot delete or overwrite alice's closing line
+  const bobDeleteAlice = await request(
+    "/recaps/2026-08/closing",
+    "DELETE",
+    undefined,
+    "bob",
+  );
+  assert.equal(bobDeleteAlice.status, 204);
+  // Alice's closing line remains intact
+  const aliceDocAfterBob = await db.get("users/alice/closingLines/2026-08");
+  assert.equal(
+    aliceDocAfterBob.text,
+    "Carry forward gentle mornings and more outdoor time.",
+  );
+
+  // 4. Regeneration survival: add a memory for alice and make recap for 2026-08
+  await request(
+    "/memories",
+    "POST",
+    {
+      id: "august-memory-1",
+      title: "Morning coffee outdoors",
+      text: "Sat outside listening to the birds.",
+      kind: "text",
+      tags: ["peace", "outdoors"],
+      occurredAt: "2026-08-15T08:00:00Z",
+      favorite: false,
+    },
+    "alice",
+  );
+
+  const recapRes = await request("/recaps/2026-08", "POST", {}, "alice");
+  assert.equal(recapRes.status, 200);
+  assert.equal(
+    recapRes.body.closingLine,
+    "Carry forward gentle mornings and more outdoor time.",
+  );
+
+  // Delete the memory (which invokes clearDerived(uid))
+  await request("/memories/august-memory-1", "DELETE", undefined, "alice");
+
+  // Alice's closingLine still survives clearDerived!
+  const aliceClosingAfterClear = await db.get(
+    "users/alice/closingLines/2026-08",
+  );
+  assert.equal(
+    aliceClosingAfterClear.text,
+    "Carry forward gentle mornings and more outdoor time.",
+  );
+
+  // 5. Alice can update her closing line
+  const updateRes = await request(
+    "/recaps/2026-08/closing",
+    "PUT",
+    { text: "Updated: Breathe deeper every morning." },
+    "alice",
+  );
+  assert.equal(updateRes.status, 200);
+  assert.equal(updateRes.body.text, "Updated: Breathe deeper every morning.");
+
+  // 6. Alice can delete her closing line
+  const deleteRes = await request(
+    "/recaps/2026-08/closing",
+    "DELETE",
+    undefined,
+    "alice",
+  );
+  assert.equal(deleteRes.status, 204);
+  const deletedDoc = await db.get("users/alice/closingLines/2026-08");
+  assert.equal(deletedDoc, null);
+});
+
+test("conversation manual summary and authorization isolation", async () => {
+  const convId = "summary-test-conv";
+  // Alice posts a message
+  const msgRes = await request(
+    "/conversations/" + convId + "/messages",
+    "POST",
+    {
+      id: "msg-1",
+      content: "Exploring thoughts about quiet work.",
+      sourceIds: [],
+    },
+    "alice",
+  );
+  assert.equal(msgRes.status, 200);
+
+  // Bob tries to summarize Alice's conversation -> 404
+  const bobSummary = await request(
+    "/conversations/" + convId + "/summary",
+    "POST",
+    {},
+    "bob",
+  );
+  assert.equal(bobSummary.status, 404);
+
+  // Alice explicitly summarizes her conversation -> 200 with summary
+  const aliceSummary = await request(
+    "/conversations/" + convId + "/summary",
+    "POST",
+    {},
+    "alice",
+  );
+  assert.equal(aliceSummary.status, 200);
+  assert.ok(aliceSummary.body.summary);
+  assert.ok(aliceSummary.body.summary.includes("Refreshed summary"));
+});
+
+test("daily AI quota tracking, user isolation, and rate-limit error contract", async () => {
+  const quotaUser = "quota-test-user-" + Date.now();
+  // 1. Initial usage
+  const initUsage = await request("/usage", "GET", undefined, quotaUser);
+  assert.equal(initUsage.status, 200);
+  assert.equal(initUsage.body.dailyLimit, 20);
+  assert.equal(initUsage.body.used, 0);
+  assert.equal(initUsage.body.remaining, 20);
+
+  // 2. Perform AI operations up to limit (20 units)
+  // Posting 1 conversation message costs 2 units (chat reply + auto summary)
+  const initialMsg = await request(
+    "/conversations/quota-conv/messages",
+    "POST",
+    { id: "m-init", content: "Initial message", sourceIds: [] },
+    quotaUser,
+  );
+  assert.equal(initialMsg.status, 200);
+
+  // Call summary 18 times (1 unit each, 2 + 18 = 20 units)
+  for (let i = 0; i < 18; i++) {
+    const r = await request(
+      "/conversations/quota-conv/summary",
+      "POST",
+      {},
+      quotaUser,
+    );
+    assert.equal(r.status, 200);
+  }
+
+  // 3. Check usage is now at 20 / 20
+  const maxUsage = await request("/usage", "GET", undefined, quotaUser);
+  assert.equal(maxUsage.body.used, 20);
+  assert.equal(maxUsage.body.remaining, 0);
+
+  // 4. Next AI operation must fail with 429 and DAILY_AI_QUOTA_EXCEEDED
+  const overRes = await request(
+    "/conversations/quota-conv/summary",
+    "POST",
+    {},
+    quotaUser,
+  );
+  assert.equal(overRes.status, 429);
+  assert.equal(overRes.body.code, "DAILY_AI_QUOTA_EXCEEDED");
+  assert.ok(overRes.body.error.includes("Daily AI limit reached"));
+  assert.ok(overRes.headers.get("retry-after"));
+
+  // 5. User isolation: Bob still has full quota available
+  const bobUsage = await request("/usage", "GET", undefined, "quota-bob-" + Date.now());
+  assert.equal(bobUsage.body.used, 0);
+  assert.equal(bobUsage.body.remaining, 20);
 });

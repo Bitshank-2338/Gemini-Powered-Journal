@@ -53,12 +53,41 @@ export function Capture({
     [recording, setRecording] = useState(false),
     [seconds, setSeconds] = useState(0),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const id = useRef(initial?.id || crypto.randomUUID()),
-    recorder = useRef<MediaRecorder | null>(null),
+    [error, setError] = useState(""),
+    [confirmDiscard, setConfirmDiscard] = useState(false);
+  const id = useRef(initial?.id || "");
+
+  const isDirty =
+    title.trim() !== (initial?.title || "") ||
+    text.trim() !== (initial?.text || "") ||
+    tags.trim() !== (initial?.tags.join(", ") || "") ||
+    !!file;
+
+  const requestClose = () => {
+    if (isDirty) {
+      setConfirmDiscard(true);
+    } else {
+      stop();
+      onClose();
+    }
+  };
+  if (!id.current) {
+    id.current =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+  }
+  const recorder = useRef<MediaRecorder | null>(null),
     stream = useRef<MediaStream | null>(null),
     input = useRef<HTMLInputElement>(null),
     alive = useRef(true);
+
+  const stop = () => {
+    if (recorder.current?.state === "recording") recorder.current.stop();
+    setRecording(false);
+    stream.current?.getTracks().forEach((t) => t.stop());
+  };
+
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -78,17 +107,17 @@ export function Capture({
   }, [file]);
   useEffect(() => {
     if (!recording) return;
-    const timer = setInterval(() => setSeconds((s) => s + 1), 1000);
+    const timer = setInterval(() => {
+      setSeconds((s) => {
+        if (s >= 299) {
+          stop();
+          return 300;
+        }
+        return s + 1;
+      });
+    }, 1000);
     return () => clearInterval(timer);
   }, [recording]);
-  useEffect(() => {
-    if (seconds >= 300 && recording) stop();
-  }, [seconds, recording]);
-  function stop() {
-    if (recorder.current?.state === "recording") recorder.current.stop();
-    setRecording(false);
-    stream.current?.getTracks().forEach((t) => t.stop());
-  }
   async function record() {
     setError("");
     try {
@@ -182,7 +211,7 @@ export function Capture({
     <div
       className="modal-backdrop"
       onClick={(e) => {
-        if (e.target === e.currentTarget && !busy) onClose();
+        if (e.target === e.currentTarget && !busy) requestClose();
       }}
     >
       <section
@@ -192,14 +221,17 @@ export function Capture({
         aria-labelledby="capture-title"
         className="modal capture-modal"
         onKeyDown={(e) => {
-          if (e.key === "Escape" && !busy) onClose();
+          if (e.key === "Escape" && !busy) {
+            if (confirmDiscard) setConfirmDiscard(false);
+            else requestClose();
+          }
         }}
       >
         <div className="section-head">
           <span className="eyebrow">A MOMENT, KEPT</span>
           <button
             className="icon-button"
-            onClick={onClose}
+            onClick={requestClose}
             disabled={busy}
             aria-label="Close capture"
           >
@@ -209,6 +241,30 @@ export function Capture({
         <h2 id="capture-title">
           {initial ? "Revisit your words." : "A thought worth keeping."}
         </h2>
+        {confirmDiscard && (
+          <div className="discard-confirmation-banner" role="alert">
+            <p>You have unsaved changes in this memory. Discard them?</p>
+            <div className="discard-actions">
+              <button
+                type="button"
+                className="danger-button small"
+                onClick={() => {
+                  stop();
+                  onClose();
+                }}
+              >
+                Discard changes
+              </button>
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => setConfirmDiscard(false)}
+              >
+                Keep editing
+              </button>
+            </div>
+          </div>
+        )}
         {!initial && (
           <div className="segmented">
             {(
@@ -368,7 +424,13 @@ export function Capture({
             disabled={busy || recording || !title.trim()}
           >
             {busy ? <LoaderCircle className="spin" size={18} /> : null}
-            {busy ? "Saving your memory…" : "Save memory"}
+            {busy
+              ? initial
+                ? "Updating memory…"
+                : "Saving your memory…"
+              : initial
+                ? "Update memory"
+                : "Save memory"}
           </button>
         </form>
       </section>

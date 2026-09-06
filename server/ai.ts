@@ -35,18 +35,41 @@ const memoryContext = (memories: Memory[]) =>
   }));
 async function generate(contents: any, json = false) {
   const ai = await getClient();
-  const response = await ai.models.generateContent({
-    model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
-    contents,
-    config: {
-      systemInstruction: guidance,
-      maxOutputTokens: 4096,
-      ...(json ? { responseMimeType: "application/json" } : {}),
-      httpOptions: { timeout: 60000 },
-    },
-  });
-  if (!response.text?.trim()) throw new Error("AI_EMPTY");
-  return json ? JSON.parse(response.text) : response.text;
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  let lastError: any;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          systemInstruction: guidance,
+          maxOutputTokens: 4096,
+          ...(json ? { responseMimeType: "application/json" } : {}),
+          httpOptions: { timeout: 60000 },
+        },
+      });
+      if (!response.text?.trim()) throw new Error("AI_EMPTY");
+      return json ? JSON.parse(response.text) : response.text;
+    } catch (err: any) {
+      lastError = err;
+      const status =
+        err?.status || err?.code || err?.error?.code || err?.error?.status;
+      const isTransient =
+        status === 503 ||
+        status === 429 ||
+        status === "UNAVAILABLE" ||
+        status === "RESOURCE_EXHAUSTED" ||
+        err?.message?.includes("high demand") ||
+        err?.message?.includes("UNAVAILABLE");
+      if (isTransient && attempt < 2) {
+        await new Promise((r) => setTimeout(r, (attempt + 1) * 1000));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
 }
 const citations = z.array(z.string()).max(12);
 const recommendationSchema = z
@@ -80,6 +103,7 @@ export interface JournalAI {
     messages: ChatMessage[],
     memories: Memory[],
   ): Promise<{ reply: string; summary: string }>;
+  summarize(messages: ChatMessage[]): Promise<string>;
   transcribe(bytes: Buffer, mime: string): Promise<string>;
   recommend(
     memories: Memory[],
@@ -102,7 +126,33 @@ export const journalAI: JournalAI = {
         JSON.stringify(memoryContext(memories)),
     });
     const reply = (await generate(history)).slice(0, 16000);
-    const summary = (
+    let summary = "";
+    try {
+      summary = (
+        await generate([
+          {
+            role: "user",
+            parts: [
+              {
+                text:
+                  "Summarize this conversation in under 100 words. Ground it in the user words; distinguish suggestions from decisions. Conversation data: " +
+                  JSON.stringify([
+                    ...messages,
+                    { role: "assistant", content: reply },
+                  ]),
+              },
+            ],
+          },
+        ])
+      ).slice(0, 4000);
+    } catch {
+      // Summary failure should not invalidate the generated reply
+      summary = "";
+    }
+    return { reply, summary };
+  },
+  async summarize(messages) {
+    return (
       await generate([
         {
           role: "user",
@@ -110,16 +160,12 @@ export const journalAI: JournalAI = {
             {
               text:
                 "Summarize this conversation in under 100 words. Ground it in the user words; distinguish suggestions from decisions. Conversation data: " +
-                JSON.stringify([
-                  ...messages,
-                  { role: "assistant", content: reply },
-                ]),
+                JSON.stringify(messages),
             },
           ],
         },
       ])
     ).slice(0, 4000);
-    return { reply, summary };
   },
   async transcribe(bytes, mime) {
     return (
