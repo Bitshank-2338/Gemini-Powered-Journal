@@ -5,8 +5,8 @@
 - Project: fifa-502907; billing is enabled.
 - The existing named Firestore database exists in asia-southeast1:
   ai-studio-a28db4f0-2851-4cf7-9493-a6170f5d46a4.
-- The configured default bucket fifa-502907.firebasestorage.app returned 404.
-- Secret Manager returned SERVICE_DISABLED.
+- Private media bucket `fifa-502907-daynote-media` now exists in `asia-southeast1`.
+- Secret Manager is enabled and `daynote-gemini` now exists with automatic replication, but it has no versions yet.
 - No Gemini secret value was read, created or copied during this rebuild.
 - Runtime IAM, Google sign-in domains and scheduled execution still require live verification.
 
